@@ -11,6 +11,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.StatChanged;
+import net.runelite.client.audio.AudioPlayer;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -31,12 +32,16 @@ public class LowHpAlarmPlugin extends Plugin
 	@Inject
 	private LowHpAlarmConfig config;
 
-	private final AlarmPlayer player = new AlarmPlayer();
+	@Inject
+	private AudioPlayer audioPlayer;
+
+	private AlarmPlayer player;
 	private boolean alarming;
 
 	@Override
 	protected void startUp()
 	{
+		player = new AlarmPlayer(audioPlayer);
 		evaluate();
 	}
 
@@ -44,7 +49,10 @@ public class LowHpAlarmPlugin extends Plugin
 	protected void shutDown()
 	{
 		alarming = false;
-		player.close();
+		if (player != null)
+		{
+			player.close();
+		}
 	}
 
 	@Subscribe
@@ -85,7 +93,10 @@ public class LowHpAlarmPlugin extends Plugin
 	{
 		if ("lowHpAlarm".equals(event.getGroup()))
 		{
-			player.close();
+			if (player != null)
+			{
+				player.close();
+			}
 			evaluate();
 		}
 	}
@@ -116,7 +127,10 @@ public class LowHpAlarmPlugin extends Plugin
 	{
 		boolean first = !alarming;
 		alarming = true;
-		player.start(config);
+		if (player != null)
+		{
+			player.tick(config);
+		}
 		if (first && config.chatMessage())
 		{
 			client.addChatMessage(
@@ -131,7 +145,10 @@ public class LowHpAlarmPlugin extends Plugin
 	private void stopAlarm()
 	{
 		alarming = false;
-		player.stop();
+		if (player != null)
+		{
+			player.stop();
+		}
 	}
 
 	@Provides
