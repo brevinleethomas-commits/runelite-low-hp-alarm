@@ -3,145 +3,87 @@ package com.lowhpalarm;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.Clip;
-import javax.sound.sampled.FloatControl;
-import javax.sound.sampled.LineUnavailableException;
-import javax.sound.sampled.UnsupportedAudioFileException;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.RuneLite;
+import net.runelite.client.audio.AudioPlayer;
 
 @Slf4j
 final class AlarmPlayer
 {
-	private Clip clip;
-	private String loadedPath = "";
-	private int loadedVolume = -1;
+	private static final long REPEAT_MS = 550;
 
-	void start(LowHpAlarmConfig config)
+	private final AudioPlayer audioPlayer;
+	private long lastPlayMs;
+
+	AlarmPlayer(AudioPlayer audioPlayer)
 	{
-		ensureClip(config);
-		if (clip == null)
+		this.audioPlayer = audioPlayer;
+	}
+
+	void tick(LowHpAlarmConfig config)
+	{
+		long now = System.currentTimeMillis();
+		if (now - lastPlayMs < REPEAT_MS)
 		{
 			return;
 		}
-		applyVolume(config.volume());
-		if (clip.isActive())
+		lastPlayMs = now;
+
+		float gain = toGain(config.volume());
+		try
 		{
-			return;
+			File custom = resolveFile(config.soundFile());
+			if (custom != null)
+			{
+				audioPlayer.play(custom, gain);
+			}
+			else
+			{
+				audioPlayer.play(new ByteArrayInputStream(builtInWav()), gain);
+			}
 		}
-		clip.setFramePosition(0);
-		clip.loop(Clip.LOOP_CONTINUOUSLY);
+		catch (Exception ex)
+		{
+			log.warn("Alarm playback failed", ex);
+		}
 	}
 
 	void stop()
 	{
-		if (clip != null && clip.isOpen())
-		{
-			clip.stop();
-			clip.setFramePosition(0);
-		}
+		lastPlayMs = 0;
 	}
 
 	void close()
 	{
 		stop();
-		if (clip != null)
-		{
-			clip.close();
-			clip = null;
-		}
-		loadedPath = "";
-		loadedVolume = -1;
 	}
 
-	private void ensureClip(LowHpAlarmConfig config)
+	private static float toGain(int percent)
 	{
-		String path = resolvePath(config.soundFile());
-		if (clip != null && path.equals(loadedPath))
+		int p = Math.max(0, Math.min(100, percent));
+		if (p <= 0)
 		{
-			return;
+			return -80f;
 		}
-		close();
-		try
-		{
-			clip = AudioSystem.getClip();
-			if (!path.isEmpty())
-			{
-				try (AudioInputStream stream = AudioSystem.getAudioInputStream(new File(path)))
-				{
-					clip.open(stream);
-				}
-			}
-			else
-			{
-				try (AudioInputStream stream = AudioSystem.getAudioInputStream(new ByteArrayInputStream(builtInWav())))
-				{
-					clip.open(stream);
-				}
-			}
-			loadedPath = path;
-		}
-		catch (UnsupportedAudioFileException | IOException | LineUnavailableException | IllegalArgumentException ex)
-		{
-			log.warn("Could not open alarm sound, using built-in tone", ex);
-			try
-			{
-				if (clip != null && clip.isOpen())
-				{
-					clip.close();
-				}
-				clip = AudioSystem.getClip();
-				try (AudioInputStream stream = AudioSystem.getAudioInputStream(new ByteArrayInputStream(builtInWav())))
-				{
-					clip.open(stream);
-				}
-				loadedPath = "";
-			}
-			catch (Exception inner)
-			{
-				log.warn("Built-in alarm failed", inner);
-				clip = null;
-			}
-		}
+		return (float) (20.0 * Math.log10(p / 100.0));
 	}
 
-	private void applyVolume(int percent)
-	{
-		if (clip == null || percent == loadedVolume)
-		{
-			return;
-		}
-		loadedVolume = percent;
-		if (!clip.isControlSupported(FloatControl.Type.MASTER_GAIN))
-		{
-			return;
-		}
-		FloatControl gain = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
-		float min = gain.getMinimum();
-		float max = Math.min(gain.getMaximum(), 0f);
-		float t = Math.max(0, Math.min(100, percent)) / 100f;
-		gain.setValue(min + (max - min) * t);
-	}
-
-	private static String resolvePath(String configured)
+	private static File resolveFile(String configured)
 	{
 		if (configured != null && !configured.isBlank())
 		{
 			File direct = new File(configured.trim());
 			if (direct.isFile())
 			{
-				return direct.getAbsolutePath();
+				return direct;
 			}
 		}
 		File dropped = new File(new File(RuneLite.RUNELITE_DIR, "low-hp-alarm"), "alarm.wav");
 		if (dropped.isFile())
 		{
-			return dropped.getAbsolutePath();
+			return dropped;
 		}
-		return "";
+		return null;
 	}
 
 	static byte[] builtInWav()
