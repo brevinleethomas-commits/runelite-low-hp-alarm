@@ -3,6 +3,7 @@ package com.lowhpalarm;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.RuneLite;
 import net.runelite.client.audio.AudioPlayer;
@@ -10,10 +11,10 @@ import net.runelite.client.audio.AudioPlayer;
 @Slf4j
 final class AlarmPlayer
 {
-	private static final long REPEAT_MS = 550;
+	private static final long BUILTIN_MS = 520;
 
 	private final AudioPlayer audioPlayer;
-	private long lastPlayMs;
+	private long nextPlayMs;
 
 	AlarmPlayer(AudioPlayer audioPlayer)
 	{
@@ -23,16 +24,18 @@ final class AlarmPlayer
 	void tick(LowHpAlarmConfig config)
 	{
 		long now = System.currentTimeMillis();
-		if (now - lastPlayMs < REPEAT_MS)
+		if (now < nextPlayMs)
 		{
 			return;
 		}
-		lastPlayMs = now;
+
+		File custom = resolveFile(config.soundFile());
+		long durationMs = custom != null ? wavDurationMs(custom) : BUILTIN_MS;
+		nextPlayMs = now + durationMs + 40;
 
 		float gain = toGain(config.volume());
 		try
 		{
-			File custom = resolveFile(config.soundFile());
 			if (custom != null)
 			{
 				audioPlayer.play(custom, gain);
@@ -45,12 +48,13 @@ final class AlarmPlayer
 		catch (Exception ex)
 		{
 			log.warn("Alarm playback failed", ex);
+			nextPlayMs = now + 1000;
 		}
 	}
 
 	void stop()
 	{
-		lastPlayMs = 0;
+		nextPlayMs = 0;
 	}
 
 	void close()
@@ -86,10 +90,77 @@ final class AlarmPlayer
 		return null;
 	}
 
+	private static long wavDurationMs(File file)
+	{
+		try (RandomAccessFile raf = new RandomAccessFile(file, "r"))
+		{
+			if (raf.length() < 44 || !"RIFF".equals(readAscii(raf, 4)))
+			{
+				return BUILTIN_MS;
+			}
+			raf.skipBytes(4);
+			if (!"WAVE".equals(readAscii(raf, 4)))
+			{
+				return BUILTIN_MS;
+			}
+
+			int byteRate = 0;
+			int dataSize = 0;
+			while (raf.getFilePointer() + 8 <= raf.length())
+			{
+				String id = readAscii(raf, 4);
+				int size = readIntLE(raf);
+				if (size < 0)
+				{
+					break;
+				}
+				long dataStart = raf.getFilePointer();
+				long next = Math.min(raf.length(), dataStart + size + (size & 1));
+
+				if ("fmt ".equals(id) && size >= 16)
+				{
+					raf.skipBytes(8);
+					byteRate = readIntLE(raf);
+				}
+				else if ("data".equals(id))
+				{
+					dataSize = size;
+					break;
+				}
+				raf.seek(next);
+			}
+
+			if (byteRate > 0 && dataSize > 0)
+			{
+				return Math.max(200L, dataSize * 1000L / byteRate);
+			}
+		}
+		catch (IOException ignored)
+		{
+		}
+		return BUILTIN_MS;
+	}
+
+	private static String readAscii(RandomAccessFile raf, int n) throws IOException
+	{
+		byte[] b = new byte[n];
+		raf.readFully(b);
+		return new String(b, 0, n);
+	}
+
+	private static int readIntLE(RandomAccessFile raf) throws IOException
+	{
+		int b0 = raf.readUnsignedByte();
+		int b1 = raf.readUnsignedByte();
+		int b2 = raf.readUnsignedByte();
+		int b3 = raf.readUnsignedByte();
+		return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+	}
+
 	static byte[] builtInWav()
 	{
 		final int sampleRate = 8000;
-		final int durationMs = 520;
+		final int durationMs = (int) BUILTIN_MS;
 		final int n = sampleRate * durationMs / 1000;
 		byte[] pcm = new byte[n];
 		for (int i = 0; i < n; i++)
