@@ -14,7 +14,7 @@ final class AlarmPlayer
 	private static final long BUILTIN_MS = 520;
 
 	private final AudioPlayer audioPlayer;
-	private long nextPlayMs;
+	private long playingUntilMs;
 
 	AlarmPlayer(AudioPlayer audioPlayer)
 	{
@@ -24,14 +24,14 @@ final class AlarmPlayer
 	void tick(LowHpAlarmConfig config)
 	{
 		long now = System.currentTimeMillis();
-		if (now < nextPlayMs)
+		if (now < playingUntilMs)
 		{
 			return;
 		}
 
 		File custom = resolveFile(config.soundFile());
 		long durationMs = custom != null ? wavDurationMs(custom) : BUILTIN_MS;
-		nextPlayMs = now + durationMs + 40;
+		playingUntilMs = now + durationMs + 40;
 
 		float gain = toGain(config.volume());
 		try
@@ -48,13 +48,14 @@ final class AlarmPlayer
 		catch (Exception ex)
 		{
 			log.warn("Alarm playback failed", ex);
-			nextPlayMs = now + 1000;
+			playingUntilMs = now + 1000;
 		}
 	}
 
 	void stop()
 	{
-		nextPlayMs = 0;
+		// AudioPlayer cannot cancel a clip that already started.
+		// Keep playingUntilMs so a new copy is not stacked on top.
 	}
 
 	void close()
